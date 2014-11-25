@@ -8,7 +8,7 @@ import random
 import boto.s3
 
 from hashsync.utils import parse_date, sha1sum, traverse_directory, strip_leading
-from hashsync.compression import compress_file
+from hashsync.compression import maybe_compress
 from hashsync.objectlist import ObjectList
 from hashsync.manifest import Manifest
 
@@ -16,7 +16,7 @@ import logging
 log = logging.getLogger(__name__)
 
 
-def upload_file(filename, keyname, bucket, reduced_redundancy=True, refresh_mintime=86400, compress_minsize=1000):
+def upload_file(filename, keyname, bucket, reduced_redundancy=True, refresh_mintime=86400, compress_minsize=1024):
     """
     Uploads file to bucket
 
@@ -26,14 +26,16 @@ def upload_file(filename, keyname, bucket, reduced_redundancy=True, refresh_mint
         bucket   (boto.s3.Bucket): S3 bucket to upload object to
         reduced_redundancy (bool): whether to use reduced redundancy storage; defaults to True
         refresh_mintime (int): minimum time before refreshing the last_modified time of the key; defaults to 86400 (one day)
-        compress_minsize (int): minimum size to try compressing the file; defaults to 1000
+        compress_minsize (int): minimum size to try compressing the file; defaults to 1024
 
     Returns:
         state (str):       one of "skipped", "refreshed", "uploaded"
     """
     filesize = os.path.getsize(filename)
+    if filesize == 0:
+        log.debug("skipping 0 byte file; no need to upload it")
+        return "skipped"
 
-    # TODO: Add special case for 0-byte files.
     key = bucket.get_key(keyname)
     if key:
         log.debug("we already have %s last-modified: %s", keyname, key.last_modified)
@@ -51,15 +53,10 @@ def upload_file(filename, keyname, bucket, reduced_redundancy=True, refresh_mint
         key = bucket.new_key(keyname)
 
     log.debug("compressing %s", filename)
-    fobj = None
-    if filesize >= compress_minsize:
-        compressed_size, compressed_fobj = compress_file(filename)
-        if compressed_size < filesize:
-            key.set_metadata('Content-Encoding', 'gzip')
-            fobj = compressed_fobj
 
-    if not fobj:
-        fobj = open(filename, 'rb')
+    fobj, was_compressed = maybe_compress(filename, compress_minsize)
+    if was_compressed:
+        key.set_metadata('Content-Encoding', 'gzip')
 
     log.info("uploading %s to %s", filename, keyname)
     key.set_contents_from_file(fobj, policy='public-read', reduced_redundancy=reduced_redundancy)
@@ -127,7 +124,8 @@ def upload_directory(dirname, object_list, pool, bucket, dryrun=False):
 
         # TODO: Handle packing together smaller files
         if not dryrun:
-            job = pool.apply_async(upload_file, (filename, h, bucket))
+            keyname = "objects/{}".format(h)
+            job = pool.apply_async(upload_file, (filename, keyname, bucket))
             jobs.append((job, filename, h))
         else:
             jobs.append((None, filename, h))
@@ -182,7 +180,6 @@ def main():
     else:
         bucket = None
 
-    # TODO: Remove leading directory components from manifest?
     manifest = process_directory(args.dirname, bucket, args.jobs, dryrun=args.dryrun)
 
     manifest.save(args.output, compress=args.compress_manifest)

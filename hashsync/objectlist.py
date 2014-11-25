@@ -27,7 +27,7 @@ class ObjectList(object):
 
             objects = data.split("\n")
             self.objects.update(objects)
-            log.info("loaded %i old objects", len(objects))
+            log.info("loaded %i old objects from %s/%s", len(objects), self.bucket.name, self.keyname)
 
         return self.objects
 
@@ -36,8 +36,8 @@ class ObjectList(object):
 
         manifest = self.bucket.new_key(self.keyname)
         manifest.set_metadata('Content-Encoding', 'gzip')
-        manifest.set_contents_from_file(gzip_compress(manifest_data))
-        log.info("wrote %i objects to manifest", len(self.objects))
+        manifest.set_contents_from_string(gzip_compress(manifest_data))
+        log.info("wrote %i objects to manifest %s/%s", len(self.objects), self.bucket.name, self.keyname)
 
     def __contains__(self, h):
         return h in self.objects

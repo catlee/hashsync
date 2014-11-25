@@ -11,6 +11,9 @@ import tempfile
 
 from hashsync.utils import iterfile
 
+import logging
+log = logging.getLogger(__name__)
+
 
 def compress_stream(src, dst):
     """
@@ -79,13 +82,38 @@ def compress_file(filename, in_memsize=104857600):
     return size, dst
 
 
+def maybe_compress(filename, compress_minsize=1024):
+    """
+    Maybe compresses a file depending on its size
+
+    Arguments:
+        filename (str): filename to compress
+        compress_minsize (int): minimum size to try compressing the file; defaults to 1024
+
+    Returns:
+        (fobj, was_compressed): a tuple of a file object seeked to the
+        beginning of the data, and a boolean indicating if the result is
+        compressed or not
+    """
+    size = os.path.getsize(filename)
+    if size < compress_minsize:
+        return open(filename, 'rb'), False
+
+    compressed_size, compressed_fobj = compress_file(filename)
+    if compressed_size >= size:
+        # Compressed file was larger
+        log.info("%s was larger when compressed; using uncompressed version", filename)
+        return open(filename, 'rb'), False
+
+    return compressed_fobj, True
+
+
 def gzip_compress(data):
     f = BytesIO()
     gz = gzip.GzipFile(mode='wb', fileobj=f)
     gz.write(data)
     gz.close()
-    f.seek(0)
-    return f
+    return f.getvalue()
 
 
 def gzip_decompress(data):
