@@ -11,7 +11,7 @@ class ObjectList(object):
     """
     Handle getting/uploading list of objects from s3 bucket
     """
-    def __init__(self, bucket, keyname="objects"):
+    def __init__(self, bucket, keyname="objectlist"):
         # Set of object hashes we know about
         self.objects = set()
         self.bucket = bucket

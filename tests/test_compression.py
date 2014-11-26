@@ -31,7 +31,7 @@ class TestCompression(unittest.TestCase):
         compressed_data = dst.getvalue()
         # test gzip magic
         self.assertEqual(compressed_data[:2], GZIP_MAGIC)
-        self.assertEquals(gzip_decompress(compressed_data), b'hello world')
+        self.assertEqual(gzip_decompress(compressed_data), b'hello world')
 
     def test_decompress_stream(self):
         src = BytesIO(HELLO_WORLD)
@@ -74,11 +74,11 @@ class TestCompression(unittest.TestCase):
         # test gzip magic
         self.assertEqual(compressed_data[:2], GZIP_MAGIC)
 
-        self.assertEquals(gzip_decompress(compressed_data), b'hello world')
+        self.assertEqual(gzip_decompress(compressed_data), b'hello world')
 
     def test_gzip_decompress(self):
         data = gzip_decompress(HELLO_WORLD)
-        self.assertEquals(data, b'hello world')
+        self.assertEqual(data, b'hello world')
 
 
 if __name__ == '__main__':

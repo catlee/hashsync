@@ -1,44 +1,52 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-import gzip
-import sys
+
+import json
 
 
-# TODO: Do we want to handle permissions and directories here?
+# TODO: Do we want to directories here?
 class Manifest(object):
     """
     A Manifest describes a set of files along with their hashes
     """
     def __init__(self):
-        # List of filename, hash tuples
+        # List of hash, filename, permission tuples
         self.files = []
 
-    def add(self, h, filename):
-        self.files.append((h, filename))
+    def add(self, h, filename, perms):
+        """
+        Adds a file to the manifest
 
-    def save(self, output_file, compress=True):
-        if output_file in (None, "-"):
-            manifest_outfile = sys.stdout
-        elif compress:
-            manifest_outfile = gzip.GzipFile(output_file, 'wb')
-        else:
-            manifest_outfile = open(output_file, 'wb')
+        Arguments:
+            h (str): the sha1 has of the file
+            filename (str): the filename, usually relative to some top level directory
+            perms (int): integer representation of file permissions
+        """
+        self.files.append((h, filename, perms))
 
-        for h, filename in self.files:
-            manifest_outfile.write("%s %s\n" % (h, filename))
-        manifest_outfile.close()
+    def save(self, output_file):
+        """
+        Outputs the manifest to a file object. Permissions are output in octal representation.
 
-    def load(self, input_file, compressed=True):
-        # TODO: Detect if the file is compressed or not
-        if compressed:
-            f = gzip.GzipFile(input_file, 'rb')
-        else:
-            f = open(input_file, 'rb')
+        Arguments:
+            output_file (file object): the file object to write the manifest to
+        """
+        data = json.dumps(self.files, output_file, indent=2)
+        data = data.encode("utf8")
+        output_file.write(data)
 
-        with f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                h, filename = line.split(" ", 1)
-                self.add(h, filename)
+        #for h, filename, perms in self.files:
+            #line = u"{0} {1} 0{2:o}\n".format(h, filename, perms)
+            #output_file.write(line.encode("utf8"))
+
+    def load(self, input_file):
+        """
+        Loads a manifest from a file object
+
+        Arguments:
+            input_file (file_object): the file object to read the manifest from
+        """
+        data = input_file.read().decode("utf8")
+
+        for h, filename, perms in json.loads(data):
+            self.add(h, filename, perms)
