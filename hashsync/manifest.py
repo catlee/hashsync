@@ -4,10 +4,10 @@
 import json
 
 
-# TODO: Do we want to directories here?
+# TODO: Do we want to handle directories here?
 class Manifest(object):
     """
-    A Manifest describes a set of files along with their hashes
+    A Manifest describes a set of files along with their hashes and permissions
     """
     def __init__(self):
         # List of hash, filename, permission tuples
