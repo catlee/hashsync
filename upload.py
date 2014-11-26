@@ -16,8 +16,9 @@ import logging
 log = logging.getLogger(__name__)
 
 
-# Globals for connections and stuff
-CONN = None
+# Global bucket we're using
+# It's easiest to use a global object here so we can maintain one connection
+# pool per process
 BUCKET = None
 
 
@@ -74,7 +75,8 @@ def process_directory(dirname, jobs, dryrun=False):
     else:
         object_list = ObjectList(None)
 
-    pool = multiprocessing.Pool(jobs, initializer=connect, initargs=(CONN.region_name, BUCKET.name))
+    pool = multiprocessing.Pool(jobs, initializer=connect,
+                                initargs=(BUCKET.connection.region_name, BUCKET.name))
 
     upload_jobs = upload_directory(dirname, object_list, pool, dryrun=dryrun)
 
@@ -158,10 +160,10 @@ def dupes_report(manifest):
 
 
 def connect(region, bucket_name):
-    global CONN, BUCKET
-    CONN = boto.s3.connect_to_region(region)
-    CONN.region_name = region
-    BUCKET = CONN.get_bucket(bucket_name)
+    global BUCKET
+    conn = boto.s3.connect_to_region(region)
+    conn.region_name = region
+    BUCKET = conn.get_bucket(bucket_name)
 
 
 def main():
