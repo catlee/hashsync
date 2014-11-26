@@ -35,10 +35,6 @@ class Manifest(object):
         data = data.encode("utf8")
         output_file.write(data)
 
-        #for h, filename, perms in self.files:
-            #line = u"{0} {1} 0{2:o}\n".format(h, filename, perms)
-            #output_file.write(line.encode("utf8"))
-
     def load(self, input_file):
         """
         Loads a manifest from a file object

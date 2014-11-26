@@ -24,6 +24,7 @@ class ObjectList(object):
             data = remote_objects.get_contents_as_string()
             if remote_objects.content_encoding == 'gzip':
                 data = gzip_decompress(data)
+            data = data.decode("ascii")
 
             objects = data.split("\n")
             self.objects.update(objects)
@@ -33,6 +34,7 @@ class ObjectList(object):
 
     def save(self):
         manifest_data = "\n".join(sorted(self.objects))
+        manifest_data = manifest_data.encode("ascii")
 
         manifest = self.bucket.new_key(self.keyname)
         manifest.set_metadata('Content-Encoding', 'gzip')
