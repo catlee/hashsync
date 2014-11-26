@@ -75,8 +75,7 @@ def process_directory(dirname, jobs, dryrun=False):
     else:
         object_list = ObjectList(None)
 
-    pool = multiprocessing.Pool(jobs, initializer=connect,
-                                initargs=(BUCKET.connection.region_name, BUCKET.name))
+    pool = multiprocessing.Pool(jobs)
 
     upload_jobs = upload_directory(dirname, object_list, pool, dryrun=dryrun)
 
@@ -168,6 +167,8 @@ def connect(region, bucket_name):
 
 def main():
     import argparse
+    import sys
+    import gzip
 
     parser = argparse.ArgumentParser()
     # TODO: These aren't required if no-upload is set
@@ -193,7 +194,15 @@ def main():
 
     manifest = process_directory(args.dirname, args.jobs, dryrun=args.dryrun)
 
-    manifest.save(args.output, compress=args.compress_manifest)
+    if args.output == '-':
+        output_file = sys.stdout
+    else:
+        output_file = open(args.output, 'wb')
+
+    if args.compress_manifest:
+        output_file = gzip.GzipFile(fileobj=output_file, mode='wb')
+
+    manifest.save(output_file)
 
     if args.report_dupes:
         dupes_report(manifest)
