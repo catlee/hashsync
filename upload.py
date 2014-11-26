@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 import os
 import time
-from multiprocessing import Process, Queue
-from Queue import Empty
+import multiprocessing
 from collections import defaultdict
 import random
 
@@ -17,14 +16,18 @@ import logging
 log = logging.getLogger(__name__)
 
 
-def upload_file(filename, keyname, bucket, reduced_redundancy=True, refresh_mintime=86400, compress_minsize=1024):
+# Globals for connections and stuff
+CONN = None
+BUCKET = None
+
+
+def upload_file(filename, keyname, reduced_redundancy=True, refresh_mintime=86400, compress_minsize=1024):
     """
-    Uploads file to bucket
+    Uploads file to the global BUCKET.
 
     Arguments:
         filename (str):    path to local file
         keyname  (str):    key name to store object
-        bucket   (boto.s3.Bucket): S3 bucket to upload object to
         reduced_redundancy (bool): whether to use reduced redundancy storage; defaults to True
         refresh_mintime (int): minimum time before refreshing the last_modified time of the key; defaults to 86400 (one day)
         compress_minsize (int): minimum size to try compressing the file; defaults to 1024
@@ -37,7 +40,7 @@ def upload_file(filename, keyname, bucket, reduced_redundancy=True, refresh_mint
         log.debug("skipping 0 byte file; no need to upload it")
         return "skipped"
 
-    key = bucket.get_key(keyname)
+    key = BUCKET.get_key(keyname)
     if key:
         log.debug("we already have %s last-modified: %s", keyname, key.last_modified)
         # If this was uploaded recently, we can skip uploading it again
@@ -48,10 +51,10 @@ def upload_file(filename, keyname, bucket, reduced_redundancy=True, refresh_mint
             return "skipped"
         else:
             log.info("refreshing %s at %s", filename, keyname)
-            key.copy(bucket.name, key.name, reduced_redundancy=reduced_redundancy)
+            key.copy(BUCKET.name, key.name, reduced_redundancy=reduced_redundancy)
             return "refreshed"
     else:
-        key = bucket.new_key(keyname)
+        key = BUCKET.new_key(keyname)
 
     log.debug("compressing %s", filename)
 
@@ -64,82 +67,45 @@ def upload_file(filename, keyname, bucket, reduced_redundancy=True, refresh_mint
     return "uploaded"
 
 
-class Worker(Process):
-    daemon = True
-
-    def __init__(self, bucket, in_queue, out_queue):
-        self.bucket = bucket
-        self.in_queue = in_queue
-        self.out_queue = out_queue
-
-        Process.__init__(self)
-
-    def run(self):
-        bucket = self.bucket
-        in_queue = self.in_queue
-        out_queue = self.out_queue
-
-        while True:
-            try:
-                item = in_queue.get(timeout=10)
-                if not item:
-                    print "no item; exiting"
-                    return
-
-                filename, keyname = item
-                h = os.path.basename(keyname)
-                result = upload_file(filename, keyname, bucket)
-                out_queue.put((result, filename, h))
-            except Empty:
-                print "timeout; exiting"
-                return
-
-
-def process_directory(dirname, bucket, jobs, dryrun=False):
+def process_directory(dirname, jobs, dryrun=False):
     if not dryrun:
-        object_list = ObjectList(bucket)
+        object_list = ObjectList(BUCKET)
         object_list.load()
     else:
         object_list = ObjectList(None)
 
-    # TODO: using a regular pool (with processes) here results in really poor
-    # connection pooling behaviour, but using a threadpool means we can't
-    # compress across more than 1 core.
-    # This is because the connection (along with its pool) is being pickled
-    # for each task, so each file to process gets a new connection pool!
-    #pool = multiprocessing.pool.Pool(jobs)
+    pool = multiprocessing.Pool(jobs, initializer=connect, initargs=(CONN.region_name, BUCKET.name))
 
-    in_queue = Queue()
-    out_queue = Queue()
+    upload_jobs = upload_directory(dirname, object_list, pool, dryrun=dryrun)
 
-    workers = [Worker(bucket, in_queue, out_queue) for _ in range(jobs)]
+    stats = defaultdict(int)
+    m = Manifest()
+    # Wait for jobs
+    for job, filename, h in upload_jobs:
+        if job:
+            try:
+                state = job.get()
+                stats[state] += 1
+            except Exception:
+                log.exception("error processing %s", filename)
+                raise
+        else:
+            stats['skipped'] += 1
 
-    [w.start() for w in workers]
+        stripped = strip_leading(dirname, filename)
+        perms = os.stat(filename).st_mode & 0777
+        m.add(h, stripped, perms)
 
-    try:
-        upload_directory(dirname, object_list, in_queue, out_queue, dryrun=dryrun)
+    log.info("stats: %s", dict(stats))
 
-        stats = defaultdict(int)
-        m = Manifest()
+    # Shut down pool
+    pool.close()
+    pool.join()
 
-        # TODO: Shut down the workers
-        while not in_queue.empty() or not out_queue.empty():
-            state, filename, h = out_queue.get()
-            stats[state] += 1
-
-            stripped = strip_leading(dirname, filename)
-            perms = os.stat(filename).st_mode & 0777
-            m.add(h, stripped, perms)
-
-        log.info("stats: %s", dict(stats))
-
-        return m
-    except BaseException:
-        [w.terminate() for w in workers]
-        raise
+    return m
 
 
-def upload_directory(dirname, object_list, in_queue, out_queue, dryrun=False):
+def upload_directory(dirname, object_list, pool, dryrun=False):
     # On my system generating the hashes serially over 86MB of data with a
     # cold disk cache finishes in 1.9s. With a warm cache it
     # finishes in 0.45s.
@@ -151,29 +117,29 @@ def upload_directory(dirname, object_list, in_queue, out_queue, dryrun=False):
     #   4   0.66s   0.82
     # The only time parallelization wins is on a cold disk cache;
     # no need to try and parallize this part.
+    jobs = []
     for filename, h in traverse_directory(dirname, sha1sum):
         # re-process .1% of objects here
         # to ensure that objects get their last modified date refreshed
         # this avoids all objects expiring out of the manifest at the same time
-        keyname = "objects/{}".format(h)
         if h in object_list and random.randint(0, 999) != 0:
             log.debug("skipping %s - already in manifest", filename)
-            out_queue.put(('skipped', filename, h))
+            jobs.append((None, filename, h))
             continue
 
         # TODO: Handle packing together smaller files
         if not dryrun:
-            # TODO: running in a subprocess here results in poor connection
-            # pool behaviour; not sure why
-            #job = pool.apply_async(upload_file, (filename, keyname, bucket))
-            #jobs.append((job, filename, h))
-            in_queue.put((filename, keyname))
+            keyname = "objects/{}".format(h)
+            job = pool.apply_async(upload_file, (filename, keyname))
+            jobs.append((job, filename, h))
         else:
-            out_queue.put(('skipped', filename, h))
+            jobs.append((None, filename, h))
 
         # Add the object to the local manifest so we don't try and
         # upload it again
         object_list.add(h)
+
+    return jobs
 
 
 def dupes_report(manifest):
@@ -189,6 +155,13 @@ def dupes_report(manifest):
             log.info("%i %s", sn, filenames)
             dupe_size += sn
     log.info("%i in total duplicate files", dupe_size)
+
+
+def connect(region, bucket_name):
+    global CONN, BUCKET
+    CONN = boto.s3.connect_to_region(region)
+    CONN.region_name = region
+    BUCKET = CONN.get_bucket(bucket_name)
 
 
 def main():
@@ -214,12 +187,9 @@ def main():
     logging.getLogger('boto').setLevel(logging.INFO)
 
     if not args.dryrun:
-        conn = boto.s3.connect_to_region(args.region)
-        bucket = conn.get_bucket(args.bucket_name)
-    else:
-        bucket = None
+        connect(args.region, args.bucket_name)
 
-    manifest = process_directory(args.dirname, bucket, args.jobs, dryrun=args.dryrun)
+    manifest = process_directory(args.dirname, args.jobs, dryrun=args.dryrun)
 
     manifest.save(args.output, compress=args.compress_manifest)
 
