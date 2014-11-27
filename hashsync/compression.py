@@ -15,6 +15,9 @@ import logging
 log = logging.getLogger(__name__)
 
 
+GZIP_MAGIC = b'\x1f\x8b'
+
+
 def compress_stream(src, dst):
     """
     Compresses data from file object src and writes it to file object dst
@@ -70,16 +73,16 @@ def compress_file(filename, in_memsize=104857600):
     """
     filesize = os.path.getsize(filename)
     # Use a temporary file to compress files more than 100MB
-    src = open(filename, 'rb')
-    if filesize > in_memsize:
-        dst = tempfile.TemporaryFile()
-    else:
-        dst = BytesIO()
+    with open(filename, 'rb') as src:
+        if filesize > in_memsize:
+            dst = tempfile.TemporaryFile()
+        else:
+            dst = BytesIO()
 
-    compress_stream(src, dst)
-    size = dst.tell()
-    dst.seek(0)
-    return size, dst
+        compress_stream(src, dst)
+        size = dst.tell()
+        dst.seek(0)
+        return size, dst
 
 
 def maybe_compress(filename, compress_minsize=1024):

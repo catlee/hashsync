@@ -47,26 +47,31 @@ class TestCompression(unittest.TestCase):
         with self.assertRaises(UnsupportedOperation):
             fobj.fileno()
         self.assertEqual(fobj.read(2), GZIP_MAGIC)
+        fobj.close()
 
         # And that large files are compresed using a temporary file
         size, fobj = compress_file(__file__, in_memsize=0)
         self.assertTrue(fobj.fileno())
         self.assertEqual(fobj.read(2), GZIP_MAGIC)
+        fobj.close()
 
     def test_maybe_compress(self):
         # Check that small files aren't compressed at all
         fobj, was_compressed = maybe_compress(self.test_file, compress_minsize=1024)
         self.assertFalse(was_compressed)
+        fobj.close()
 
         # Check that small files aren't compressed if the compressed result is
         # larger than the original
         fobj, was_compressed = maybe_compress(self.test_file, compress_minsize=0)
         self.assertFalse(was_compressed)
+        fobj.close()
 
         # And that larger files are compressed
         fobj, was_compressed = maybe_compress(__file__, compress_minsize=0)
         self.assertTrue(was_compressed)
         self.assertEqual(fobj.read(2), GZIP_MAGIC)
+        fobj.close()
 
     def test_gzip_compress(self):
         compressed_data = gzip_compress(b'hello world')

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from hashsync.compression import gzip_decompress, gzip_compress
+from hashsync.compression import gzip_decompress, gzip_compress, GZIP_MAGIC
 
 import logging
 log = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ class ObjectList(object):
 
         if remote_objects:
             data = remote_objects.get_contents_as_string()
-            if remote_objects.content_encoding == 'gzip':
+            if remote_objects.content_encoding == 'gzip' or data.startswith(GZIP_MAGIC):
                 data = gzip_decompress(data)
             data = data.decode("ascii")
 

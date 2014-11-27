@@ -13,7 +13,7 @@ import boto
 import moto
 
 from hashsync.objectlist import ObjectList
-from hashsync.compression import gzip_decompress
+from hashsync.compression import gzip_decompress, gzip_compress
 
 
 class TestObjectList(unittest.TestCase):
@@ -55,4 +55,17 @@ class TestObjectList(unittest.TestCase):
         self.assertIn('hash2', o)
         self.assertNotIn("hash3", o)
 
-        # TODO: Test out compressed dataa
+    @moto.mock_s3
+    def test_load_compressed(self):
+        conn = boto.connect_s3()
+        bucket = conn.create_bucket('test-bucket')
+        key = bucket.new_key('objectlist')
+        key.set_metadata('Content-Encoding', 'gzip')
+        key.set_contents_from_string(gzip_compress(b'hash1\nhash2\n'))
+
+        o = ObjectList(bucket)
+        o.load()
+
+        self.assertIn('hash1', o)
+        self.assertIn('hash2', o)
+        self.assertNotIn("hash3", o)
