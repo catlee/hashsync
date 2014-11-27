@@ -3,6 +3,8 @@
 
 import json
 
+from hashsync.compression import GZIP_MAGIC, gzip_decompress
+
 
 # TODO: Do we want to handle directories here?
 class Manifest(object):
@@ -42,7 +44,10 @@ class Manifest(object):
         Arguments:
             input_file (file_object): the file object to read the manifest from
         """
-        data = input_file.read().decode("utf8")
+        data = input_file.read()
+        if data.startswith(GZIP_MAGIC):
+            data = gzip_decompress(data)
+        data = data.decode("utf8")
 
         for h, filename, perms in json.loads(data):
             self.add(h, filename, perms)

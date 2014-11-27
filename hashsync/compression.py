@@ -54,8 +54,6 @@ def decompress_stream(src, dst):
             dst.write(block)
 
 
-# TODO: Clean up these methods...there are too many variants doing the same
-# thing
 def compress_file(filename, in_memsize=104857600):
     """
     gzip compress a file, and return a file object with the compressed results
