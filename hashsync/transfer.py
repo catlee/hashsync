@@ -4,11 +4,13 @@ import time
 import os
 import random
 import multiprocessing
+from collections import defaultdict
 
 from hashsync.connection import get_bucket
-from hashsync.utils import parse_date, traverse_directory, sha1sum
+from hashsync.utils import parse_date, traverse_directory, sha1sum, strip_leading
 from hashsync.compression import maybe_compress
 from hashsync.objectlist import ObjectList
+from hashsync.manifest import Manifest
 
 import logging
 log = logging.getLogger(__name__)
@@ -77,7 +79,7 @@ def upload_directory(dirname, jobs, dryrun=False):
         dryrun (bool): if True, don't actually upload anything (default: False)
 
     Returns:
-        A list of (result, filename, hash) tuples.
+        A hashsync.manifest.Manifest object
     """
     if not dryrun:
         bucket = get_bucket()
@@ -122,6 +124,8 @@ def upload_directory(dirname, jobs, dryrun=False):
         object_list.add(h)
 
     retval = []
+    stats = defaultdict(int)
+    m = Manifest()
     for job, filename, h in jobs:
         if job:
             # Specify a timeout for .get() to allow us to catch
@@ -130,9 +134,15 @@ def upload_directory(dirname, jobs, dryrun=False):
         else:
             state = 'skipped'
 
+        stats[state] += 1
+        stripped = strip_leading(dirname, filename)
+        perms = os.stat(filename).st_mode & 0777
+        m.add(h, stripped, perms)
         retval.append((state, filename, h))
 
     # Shut down pool
     pool.close()
     pool.join()
-    return retval
+
+    log.info("stats: %s", dict(stats))
+    return m

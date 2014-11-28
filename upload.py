@@ -1,40 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-import os
-from collections import defaultdict
-
-from hashsync.utils import strip_leading
 from hashsync.connection import connect
-from hashsync.manifest import Manifest
 from hashsync.transfer import upload_directory
 
 import logging
 log = logging.getLogger(__name__)
-
-
-def process_directory(dirname, jobs, dryrun=False):
-    try:
-        results = upload_directory(dirname, jobs, dryrun=dryrun)
-
-        stats = defaultdict(int)
-        m = Manifest()
-        # Add to our manifest, and collect some stats
-        for state, filename, h in results:
-            stats[state] += 1
-
-            stripped = strip_leading(dirname, filename)
-            perms = os.stat(filename).st_mode & 0777
-            m.add(h, stripped, perms)
-
-        log.info("stats: %s", dict(stats))
-
-        return m
-    except KeyboardInterrupt:
-        log.error("KeyboardInterrupt - exiting")
-        exit(1)
-    except Exception:
-        log.exception("error processing %s", filename)
-        raise
 
 
 def main():
@@ -52,7 +22,7 @@ def main():
     parser.add_argument("-o", "--output", dest="output", help="where to output manifet, use '-' for stdout", default="manifest.gz")
     parser.add_argument("-z", "--compress-manifest", dest="compress_manifest",
                         help="compress manifest output (default if outputting to a file)",
-                        action="store_true")
+                        action="store_true", default=None)
     parser.add_argument("--no-compress-manifest", dest="compress_manifest",
                         help="don't compress manifest output (default if outputting to stdout)",
                         action="store_false")
@@ -69,7 +39,7 @@ def main():
     if not args.dryrun:
         connect(args.region, args.bucket_name)
 
-    manifest = process_directory(args.dirname, args.jobs, dryrun=args.dryrun)
+    manifest = upload_directory(args.dirname, args.jobs, dryrun=args.dryrun)
 
     if args.output == '-':
         output_file = sys.stdout
