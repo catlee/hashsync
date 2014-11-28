@@ -12,6 +12,11 @@ log = logging.getLogger(__name__)
 
 
 # TODO: Do we want to handle directories here?
+# TODO: Encode as dictionaries instead of tuples? A little bit more flexible
+# Using "h", "fn", and "p" as keys of dicts gets us a compressed manifest of
+# 2,304,951 bytes vs
+# 2,300,498 bytes using tuples
+# a difference of only 4k
 class Manifest(object):
     """
     A Manifest describes a set of files along with their hashes and permissions
