@@ -1,33 +1,37 @@
 #!/usr/bin/env python
 from collections import defaultdict
-from hashsync.utils import parse_date
-from hashsync.objectlist import ObjectList
 import time
 import multiprocessing
+
+from hashsync.utils import parse_date
+from hashsync.objectlist import ObjectList
+from hashsync.connection import connect, get_bucket
 
 import logging
 log = logging.getLogger(__name__)
 
 
-BUCKET = None
-
-
-def delete_object(key, version_id, reason):
-    log.info("Deleting %s %s %s", reason, key, version_id)
-    BUCKET.delete_key(key, version_id=version_id)
+def delete_objects(keys, reason):
+    log.info("Deleting %i %s keys", len(keys), reason)
+    get_bucket().delete_keys(keys)
 
 
 def delete_old_keys(too_old):
     pool = multiprocessing.Pool(8)
 
-    object_list = ObjectList(BUCKET)
+    bucket = get_bucket()
+
+    object_list = ObjectList(bucket)
     object_list.load()
 
-    new_object_list = ObjectList(BUCKET)
+    new_object_list = ObjectList(bucket)
 
     objects_by_key = defaultdict(list)
     delete_jobs = []
-    for o in BUCKET.list_versions():
+    bucket = get_bucket()
+    log.info("Listing objects...")
+    to_delete = []
+    for o in bucket.list_versions():
         if hasattr(o, 'DeleteMarker'):
             continue
         if o.key.startswith("objectlist"):
@@ -39,21 +43,37 @@ def delete_old_keys(too_old):
         if d < too_old:
             if h not in object_list:
                 # Delete old objects
-                delete_job = pool.apply_async(delete_object, (o.key, o.version_id, "old"))
-                delete_jobs.append(delete_job)
+                to_delete.append((o.key, o.version_id))
+
+                if len(to_delete) >= 1000:
+                    delete_job = pool.apply_async(delete_objects, (to_delete, "old"))
+                    delete_jobs.append(delete_job)
+                    to_delete = []
         else:
             new_object_list.add(h)
 
+    if to_delete:
+        delete_job = pool.apply_async(delete_objects, (to_delete, "old"))
+        delete_jobs.append(delete_job)
+
+    to_delete = []
     #  Delete duplicate versions of objects?
     for key, versions in objects_by_key.iteritems():
         versions.sort()
         # Delete all but the newest
         for d, v in versions[:-1]:
-            delete_job = pool.apply_async(delete_object, (key, v, "dupe"))
-            delete_jobs.append(delete_job)
+            to_delete.append((key, v))
+            if len(to_delete) >= 1000:
+                delete_job = pool.apply_async(delete_objects, (to_delete, "dupe"))
+                delete_jobs.append(delete_job)
+                to_delete = []
+
+    if to_delete:
+        delete_job = pool.apply_async(delete_objects, (to_delete, "dupe"))
+        delete_jobs.append(delete_job)
 
     for job in delete_jobs:
-        job.get()
+        job.get(86400)
 
     pool.close()
     pool.join()
@@ -62,7 +82,6 @@ def delete_old_keys(too_old):
 
 
 def main():
-    import boto.s3
     import argparse
 
     parser = argparse.ArgumentParser()
@@ -78,9 +97,7 @@ def main():
     # TODO: Add -v -v support to set this to DEBUG?
     logging.getLogger('boto').setLevel(logging.INFO)
 
-    conn = boto.s3.connect_to_region(args.region)
-    global BUCKET
-    BUCKET = conn.get_bucket(args.bucket_name)
+    connect(args.region, args.bucket_name)
 
     too_old = time.time() - 5 * 86400  # 5 days
 

@@ -1,81 +1,35 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 import os
-import time
 import multiprocessing
 from collections import defaultdict
 import random
 
-import boto.s3
-
-from hashsync.utils import parse_date, sha1sum, traverse_directory, strip_leading
-from hashsync.compression import maybe_compress
+from hashsync.utils import sha1sum, traverse_directory, strip_leading
+from hashsync.connection import connect, get_bucket
 from hashsync.objectlist import ObjectList
 from hashsync.manifest import Manifest
+from hashsync.transfer import upload_file
 
 import logging
 log = logging.getLogger(__name__)
 
 
-# Global bucket we're using
-# It's easiest to use a global object here so we can maintain one connection
-# pool per process
-BUCKET = None
-
-
-def upload_file(filename, keyname, reduced_redundancy=True, refresh_mintime=86400, compress_minsize=1024):
-    """
-    Uploads file to the global BUCKET.
-
-    Arguments:
-        filename (str):    path to local file
-        keyname  (str):    key name to store object
-        reduced_redundancy (bool): whether to use reduced redundancy storage; defaults to True
-        refresh_mintime (int): minimum time before refreshing the last_modified time of the key; defaults to 86400 (one day)
-        compress_minsize (int): minimum size to try compressing the file; defaults to 1024
-
-    Returns:
-        state (str):       one of "skipped", "refreshed", "uploaded"
-    """
-    filesize = os.path.getsize(filename)
-    if filesize == 0:
-        log.debug("skipping 0 byte file; no need to upload it")
-        return "skipped"
-
-    key = BUCKET.get_key(keyname)
-    if key:
-        log.debug("we already have %s last-modified: %s", keyname, key.last_modified)
-        # If this was uploaded recently, we can skip uploading it again
-        # If the last-modified is old enough, we copy the key on top of itself
-        # to refresh the last-modified time.
-        if parse_date(key.last_modified) > time.time() - refresh_mintime:
-            log.debug("skipping %s since it was uploaded recently, but not in manifest", filename)
-            return "skipped"
-        else:
-            log.info("refreshing %s at %s", filename, keyname)
-            key.copy(BUCKET.name, key.name, reduced_redundancy=reduced_redundancy)
-            return "refreshed"
-    else:
-        key = BUCKET.new_key(keyname)
-
-    log.debug("compressing %s", filename)
-
-    fobj, was_compressed = maybe_compress(filename, compress_minsize)
-    if was_compressed:
-        key.set_metadata('Content-Encoding', 'gzip')
-
-    log.info("uploading %s to %s", filename, keyname)
-    key.set_contents_from_file(fobj, policy='public-read', reduced_redundancy=reduced_redundancy)
-    return "uploaded"
+def init_worker():
+    "Ignore SIGINT for process workers"
+    import signal
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
 def process_directory(dirname, jobs, dryrun=False):
     if not dryrun:
-        object_list = ObjectList(BUCKET)
+        bucket = get_bucket()
+        object_list = ObjectList(bucket)
         object_list.load()
     else:
         object_list = ObjectList(None)
 
-    pool = multiprocessing.Pool(jobs)
+    pool = multiprocessing.Pool(jobs, initializer=init_worker)
 
     upload_jobs = upload_directory(dirname, object_list, pool, dryrun=dryrun)
 
@@ -85,8 +39,13 @@ def process_directory(dirname, jobs, dryrun=False):
     for job, filename, h in upload_jobs:
         if job:
             try:
-                state = job.get()
+                # Specify a timeout for .get() to allow us to catch
+                # KeyboardInterrupt.
+                state = job.get(86400)
                 stats[state] += 1
+            except KeyboardInterrupt:
+                log.error("KeyboardInterrupt - exiting")
+                exit(1)
             except Exception:
                 log.exception("error processing %s", filename)
                 raise
@@ -123,7 +82,8 @@ def upload_directory(dirname, object_list, pool, dryrun=False):
         # re-process .1% of objects here
         # to ensure that objects get their last modified date refreshed
         # this avoids all objects expiring out of the manifest at the same time
-        if h in object_list and random.randint(0, 999) != 0:
+        r = random.randint(0, 999)
+        if h in object_list and r != 0:
             log.debug("skipping %s - already in manifest", filename)
             jobs.append((None, filename, h))
             continue
@@ -158,13 +118,6 @@ def dupes_report(manifest):
     log.info("%i in total duplicate files", dupe_size)
 
 
-def connect(region, bucket_name):
-    global BUCKET
-    conn = boto.s3.connect_to_region(region)
-    conn.region_name = region
-    BUCKET = conn.get_bucket(bucket_name)
-
-
 def main():
     import argparse
     import sys
@@ -177,8 +130,13 @@ def main():
     parser.add_argument("-q", "--quiet", dest="loglevel", action="store_const", const=logging.WARN, default=logging.INFO)
     parser.add_argument("-v", "--verbose", dest="loglevel", action="store_const", const=logging.DEBUG)
     parser.add_argument("-j", "--jobs", dest="jobs", type=int, help="how many simultaneous uploads to do", default=8)
-    parser.add_argument("-o", "--output", dest="output", help="where to output manifet, use '-' for stdout")
-    parser.add_argument("-z", "--compress-manifest", dest="compress_manifest", help="compress manifest output", action="store_true")
+    parser.add_argument("-o", "--output", dest="output", help="where to output manifet, use '-' for stdout", default="manifest.gz")
+    parser.add_argument("-z", "--compress-manifest", dest="compress_manifest",
+                        help="compress manifest output (default if outputting to a file)",
+                        action="store_true")
+    parser.add_argument("--no-compress-manifest", dest="compress_manifest",
+                        help="don't compress manifest output (default if outputting to stdout)",
+                        action="store_false")
     parser.add_argument("--no-upload", dest="dryrun", action="store_true", default=False)
     parser.add_argument("--report-dupes", dest="report_dupes", action="store_true", default=False, help="report on duplicate files")
     parser.add_argument("dirname", help="directory to upload")
@@ -198,6 +156,9 @@ def main():
         output_file = sys.stdout
     else:
         output_file = open(args.output, 'wb')
+        # Enable compression by default if we're writing out to a file
+        if args.compress_manifest is None:
+            args.compress_manifest = True
 
     if args.compress_manifest:
         output_file = gzip.GzipFile(fileobj=output_file, mode='wb')

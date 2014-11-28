@@ -4,11 +4,10 @@ import os
 import shutil
 import tempfile
 
-import boto.s3
-
 from hashsync.utils import traverse_directory, sha1sum, copy_stream, strip_leading, SHA1SUM_ZERO
 from hashsync.manifest import Manifest
 from hashsync.compression import decompress_stream
+from hashsync.connection import connect, get_bucket
 
 import logging
 log = logging.getLogger(__name__)
@@ -50,8 +49,9 @@ class FileCache(object):
 
 # This is a standalone function rather than an instance method above so that it
 # can be called via multiprocessing more easily
-def download_key(bucket, keyname, dst):
+def download_key(keyname, dst):
     log.info("Downloading %s to %s", keyname, dst)
+    bucket = get_bucket()
     k = bucket.get_key(keyname)
 
     if not k:
@@ -95,8 +95,7 @@ def main():
     # TODO: Add -v -v support to set this to DEBUG?
     logging.getLogger('boto').setLevel(logging.INFO)
 
-    conn = boto.s3.connect_to_region(args.region)
-    bucket = conn.get_bucket(args.bucket_name)
+    connect(args.region, args.bucket_name)
 
     m = Manifest()
     m.load(open(args.manifest, 'rb'))
@@ -143,7 +142,7 @@ def main():
         elif h not in cache:
             cache_filename = cache.makepath(h)
             keyname = "objects/{}".format(h)
-            job = pool.apply_async(download_key, (bucket, keyname, cache_filename))
+            job = pool.apply_async(download_key, (keyname, cache_filename))
             files_by_hash[h].append(dest)
             download_jobs.append((job, h))
         else:

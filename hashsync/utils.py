@@ -10,7 +10,6 @@ import os
 import logging
 log = logging.getLogger(__name__)
 
-
 # The SHA-1 hash of zero bytes
 SHA1SUM_ZERO = 'da39a3ee5e6b4b0d3255bfef95601890afd80709'
 
