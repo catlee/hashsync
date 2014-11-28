@@ -1,121 +1,40 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import os
-import multiprocessing
 from collections import defaultdict
-import random
 
-from hashsync.utils import sha1sum, traverse_directory, strip_leading
-from hashsync.connection import connect, get_bucket
-from hashsync.objectlist import ObjectList
+from hashsync.utils import strip_leading
+from hashsync.connection import connect
 from hashsync.manifest import Manifest
-from hashsync.transfer import upload_file
+from hashsync.transfer import upload_directory
 
 import logging
 log = logging.getLogger(__name__)
 
 
-def init_worker():
-    "Ignore SIGINT for process workers"
-    import signal
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-
-
 def process_directory(dirname, jobs, dryrun=False):
-    if not dryrun:
-        bucket = get_bucket()
-        object_list = ObjectList(bucket)
-        object_list.load()
-    else:
-        object_list = ObjectList(None)
+    try:
+        results = upload_directory(dirname, jobs, dryrun=dryrun)
 
-    pool = multiprocessing.Pool(jobs, initializer=init_worker)
+        stats = defaultdict(int)
+        m = Manifest()
+        # Add to our manifest, and collect some stats
+        for state, filename, h in results:
+            stats[state] += 1
 
-    upload_jobs = upload_directory(dirname, object_list, pool, dryrun=dryrun)
+            stripped = strip_leading(dirname, filename)
+            perms = os.stat(filename).st_mode & 0777
+            m.add(h, stripped, perms)
 
-    stats = defaultdict(int)
-    m = Manifest()
-    # Wait for jobs
-    for job, filename, h in upload_jobs:
-        if job:
-            try:
-                # Specify a timeout for .get() to allow us to catch
-                # KeyboardInterrupt.
-                state = job.get(86400)
-                stats[state] += 1
-            except KeyboardInterrupt:
-                log.error("KeyboardInterrupt - exiting")
-                exit(1)
-            except Exception:
-                log.exception("error processing %s", filename)
-                raise
-        else:
-            stats['skipped'] += 1
+        log.info("stats: %s", dict(stats))
 
-        stripped = strip_leading(dirname, filename)
-        perms = os.stat(filename).st_mode & 0777
-        m.add(h, stripped, perms)
-
-    log.info("stats: %s", dict(stats))
-
-    # Shut down pool
-    pool.close()
-    pool.join()
-
-    return m
-
-
-def upload_directory(dirname, object_list, pool, dryrun=False):
-    # On my system generating the hashes serially over 86MB of data with a
-    # cold disk cache finishes in 1.9s. With a warm cache it
-    # finishes in 0.45s.
-    # Trying to do this in parallel results in these values:
-    #   n   warm    cold
-    #   1   0.55s   1.9s
-    #   2   0.56s   1.1s
-    #   3   0.66s   0.82
-    #   4   0.66s   0.82
-    # The only time parallelization wins is on a cold disk cache;
-    # no need to try and parallize this part.
-    jobs = []
-    for filename, h in traverse_directory(dirname, sha1sum):
-        # re-process .1% of objects here
-        # to ensure that objects get their last modified date refreshed
-        # this avoids all objects expiring out of the manifest at the same time
-        r = random.randint(0, 999)
-        if h in object_list and r != 0:
-            log.debug("skipping %s - already in manifest", filename)
-            jobs.append((None, filename, h))
-            continue
-
-        # TODO: Handle packing together smaller files
-        if not dryrun:
-            keyname = "objects/{}".format(h)
-            job = pool.apply_async(upload_file, (filename, keyname))
-            jobs.append((job, filename, h))
-        else:
-            jobs.append((None, filename, h))
-
-        # Add the object to the local manifest so we don't try and
-        # upload it again
-        object_list.add(h)
-
-    return jobs
-
-
-def dupes_report(manifest):
-    files_by_hash = defaultdict(list)
-    for h, filename in manifest.files:
-        s = os.path.getsize(filename)
-        files_by_hash[s, h].append(filename)
-
-    dupe_size = 0
-    for (size, h), filenames in sorted(files_by_hash.iteritems()):
-        if len(filenames) > 1:
-            sn = size * (len(filenames) - 1)
-            log.info("%i %s", sn, filenames)
-            dupe_size += sn
-    log.info("%i in total duplicate files", dupe_size)
+        return m
+    except KeyboardInterrupt:
+        log.error("KeyboardInterrupt - exiting")
+        exit(1)
+    except Exception:
+        log.exception("error processing %s", filename)
+        raise
 
 
 def main():
@@ -166,7 +85,7 @@ def main():
     manifest.save(output_file)
 
     if args.report_dupes:
-        dupes_report(manifest)
+        manifest.report_dupes()
 
 if __name__ == '__main__':
     main()

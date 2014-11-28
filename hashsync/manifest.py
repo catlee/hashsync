@@ -2,8 +2,13 @@
 # -*- coding: utf-8 -*-
 
 import json
+import os
+from collections import defaultdict
 
 from hashsync.compression import GZIP_MAGIC, gzip_decompress
+
+import logging
+log = logging.getLogger(__name__)
 
 
 # TODO: Do we want to handle directories here?
@@ -51,3 +56,20 @@ class Manifest(object):
 
         for h, filename, perms in json.loads(data):
             self.add(h, filename, perms)
+
+    def report_dupes(self):
+        """
+        Report information about duplicate files in the manifest
+        """
+        files_by_hash = defaultdict(list)
+        for h, filename in self.files:
+            s = os.path.getsize(filename)
+            files_by_hash[s, h].append(filename)
+
+        dupe_size = 0
+        for (size, h), filenames in sorted(files_by_hash.iteritems()):
+            if len(filenames) > 1:
+                sn = size * (len(filenames) - 1)
+                log.info("%i %s", sn, filenames)
+                dupe_size += sn
+        log.info("%i in total duplicate files", dupe_size)

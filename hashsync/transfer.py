@@ -2,10 +2,13 @@
 # -*- coding: utf-8 -*-
 import time
 import os
+import random
+import multiprocessing
 
 from hashsync.connection import get_bucket
-from hashsync.utils import parse_date
+from hashsync.utils import parse_date, traverse_directory, sha1sum
 from hashsync.compression import maybe_compress
+from hashsync.objectlist import ObjectList
 
 import logging
 log = logging.getLogger(__name__)
@@ -56,3 +59,80 @@ def upload_file(filename, keyname, reduced_redundancy=True, refresh_mintime=8640
     log.info("uploading %s to %s", filename, keyname)
     key.set_contents_from_file(fobj, policy='public-read', reduced_redundancy=reduced_redundancy)
     return "uploaded"
+
+
+def _init_worker():
+    "Ignore SIGINT for process workers"
+    import signal
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
+def upload_directory(dirname, jobs, dryrun=False):
+    """
+    Uploads the specified directory to the bucket returned by hashsync.connection.get_bucket()
+
+    Arguments:
+        dirname (str): local directory name to upload
+        jobs (int): how many uploads to do in parallel
+        dryrun (bool): if True, don't actually upload anything (default: False)
+
+    Returns:
+        A list of (result, filename, hash) tuples.
+    """
+    if not dryrun:
+        bucket = get_bucket()
+        object_list = ObjectList(bucket)
+        object_list.load()
+    else:
+        object_list = ObjectList(None)
+
+    # On my system generating the hashes serially over 86MB of data with a
+    # cold disk cache finishes in 1.9s. With a warm cache it
+    # finishes in 0.45s.
+    # Trying to do this in parallel results in these values:
+    #   n   warm    cold
+    #   1   0.55s   1.9s
+    #   2   0.56s   1.1s
+    #   3   0.66s   0.82
+    #   4   0.66s   0.82
+    # The only time parallelization wins is on a cold disk cache;
+    # no need to try and parallize this part.
+    pool = multiprocessing.Pool(jobs, initializer=_init_worker)
+    jobs = []
+    for filename, h in traverse_directory(dirname, sha1sum):
+        # re-process .1% of objects here
+        # to ensure that objects get their last modified date refreshed
+        # this avoids all objects expiring out of the manifest at the same time
+        r = random.randint(0, 999)
+        if h in object_list and r != 0:
+            log.debug("skipping %s - already in manifest", filename)
+            jobs.append((None, filename, h))
+            continue
+
+        # TODO: Handle packing together smaller files
+        if not dryrun:
+            keyname = "objects/{}".format(h)
+            job = pool.apply_async(upload_file, (filename, keyname))
+            jobs.append((job, filename, h))
+        else:
+            jobs.append((None, filename, h))
+
+        # Add the object to the local manifest so we don't try and
+        # upload it again
+        object_list.add(h)
+
+    retval = []
+    for job, filename, h in jobs:
+        if job:
+            # Specify a timeout for .get() to allow us to catch
+            # KeyboardInterrupt.
+            state = job.get(86400)
+        else:
+            state = 'skipped'
+
+        retval.append((state, filename, h))
+
+    # Shut down pool
+    pool.close()
+    pool.join()
+    return retval
