@@ -102,9 +102,9 @@ def upload_directory(dirname, jobs, dryrun=False):
     pool = multiprocessing.Pool(jobs, initializer=_init_worker)
     jobs = []
     for filename, h in traverse_directory(dirname, sha1sum):
-        # re-process .1% of objects here
-        # to ensure that objects get their last modified date refreshed
-        # this avoids all objects expiring out of the manifest at the same time
+        # re-process .1% of objects here to ensure that objects get their last
+        # modified date refreshed. this avoids all objects expiring out of the
+        # manifest at the same time
         r = random.randint(0, 999)
         if h in object_list and r != 0:
             log.debug("skipping %s - already in manifest", filename)
