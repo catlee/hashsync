@@ -10,6 +10,7 @@ from io import BytesIO
 import tempfile
 
 from hashsync.utils import iterfile
+from hashsync import config
 
 import logging
 log = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ def decompress_stream(src, dst):
             dst.write(block)
 
 
-def compress_file(filename, in_memsize=104857600):
+def compress_file(filename, in_memsize=config.COMPRESS_INMEM_SIZE):
     """
     gzip compress a file, and return a file object with the compressed results
 
@@ -83,7 +84,7 @@ def compress_file(filename, in_memsize=104857600):
         return size, dst
 
 
-def maybe_compress(filename, compress_minsize=1024):
+def maybe_compress(filename, compress_minsize=config.COMPRESS_MINSIZE):
     """
     Maybe compresses a file depending on its size
 

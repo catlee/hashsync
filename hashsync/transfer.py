@@ -11,12 +11,13 @@ from hashsync.utils import parse_date, traverse_directory, sha1sum, strip_leadin
 from hashsync.compression import maybe_compress
 from hashsync.objectlist import ObjectList
 from hashsync.manifest import Manifest
+from hashsync import config
 
 import logging
 log = logging.getLogger(__name__)
 
 
-def upload_file(filename, keyname, reduced_redundancy=True, refresh_mintime=86400, compress_minsize=1024):
+def upload_file(filename, keyname, reduced_redundancy=True):
     """
     Uploads the specified file to the bucket returned by hashsync.connection.get_bucket().
 
@@ -24,8 +25,6 @@ def upload_file(filename, keyname, reduced_redundancy=True, refresh_mintime=8640
         filename (str):    path to local file
         keyname  (str):    key name to store object
         reduced_redundancy (bool): whether to use reduced redundancy storage; defaults to True
-        refresh_mintime (int): minimum time before refreshing the last_modified time of the key; defaults to 86400 (one day)
-        compress_minsize (int): minimum size to try compressing the file; defaults to 1024
 
     Returns:
         state (str):       one of "skipped", "refreshed", "uploaded"
@@ -43,7 +42,7 @@ def upload_file(filename, keyname, reduced_redundancy=True, refresh_mintime=8640
         # If this was uploaded recently, we can skip uploading it again
         # If the last-modified is old enough, we copy the key on top of itself
         # to refresh the last-modified time.
-        if parse_date(key.last_modified) > time.time() - refresh_mintime:
+        if parse_date(key.last_modified) > time.time() - config.REFRESH_MINTIME:
             log.debug("skipping %s since it was uploaded recently, but not in manifest", filename)
             return "checked"
         else:
@@ -56,7 +55,7 @@ def upload_file(filename, keyname, reduced_redundancy=True, refresh_mintime=8640
 
     log.debug("compressing %s", filename)
 
-    fobj, was_compressed = maybe_compress(filename, compress_minsize)
+    fobj, was_compressed = maybe_compress(filename)
     if was_compressed:
         key.set_metadata('Content-Encoding', 'gzip')
 
@@ -104,10 +103,10 @@ def upload_directory(dirname, jobs, dryrun=False):
     pool = multiprocessing.Pool(jobs, initializer=_init_worker)
     jobs = []
     for filename, h in traverse_directory(dirname, sha1sum):
-        # re-process .1% of objects here to ensure that objects get their last
+        # re-process some objects here to ensure that objects get their last
         # modified date refreshed. this avoids all objects expiring out of the
         # manifest at the same time
-        r = random.randint(0, 999)
+        r = random.randint(0, config.REFRESH_EVERY_NTH_OBJECTS)
         if h in object_list and r != 0:
             log.debug("skipping %s - already in manifest", filename)
             jobs.append((None, filename, h))
@@ -133,7 +132,7 @@ def upload_directory(dirname, jobs, dryrun=False):
         if job:
             # Specify a timeout for .get() to allow us to catch
             # KeyboardInterrupt.
-            state = job.get(86401)
+            state = job.get(config.MAX_UPLOAD_TIME)
         else:
             state = 'skipped'
 
