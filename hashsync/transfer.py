@@ -138,7 +138,7 @@ def upload_directory(dirname, jobs, dryrun=False):
 
         stripped = strip_leading(dirname, filename)
         st = os.stat(filename)
-        perms = st.st_mode & 0777
+        perms = st.st_mode & 0o777
         size = st.st_size
         m.add(h, stripped, perms)
         retval.append((state, filename, h))
