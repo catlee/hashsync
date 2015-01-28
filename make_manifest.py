@@ -13,6 +13,8 @@ log = logging.getLogger(__name__)
 
 def delete_objects(keys, reason):
     log.info("Deleting %i %s keys", len(keys), reason)
+    # Sleep a bit to work around request limits
+    time.sleep(5)
     get_bucket().delete_keys(keys)
 
 
