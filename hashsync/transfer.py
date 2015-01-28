@@ -31,9 +31,10 @@ def upload_file(filename, keyname, reduced_redundancy=True, refresh_mintime=8640
         state (str):       one of "skipped", "refreshed", "uploaded"
     """
     filesize = os.path.getsize(filename)
+    # TODO: inline small files
     if filesize == 0:
         log.debug("skipping 0 byte file; no need to upload it")
-        return "skipped"
+        return "inlined"
 
     bucket = get_bucket()
     key = bucket.get_key(keyname)
@@ -44,9 +45,10 @@ def upload_file(filename, keyname, reduced_redundancy=True, refresh_mintime=8640
         # to refresh the last-modified time.
         if parse_date(key.last_modified) > time.time() - refresh_mintime:
             log.debug("skipping %s since it was uploaded recently, but not in manifest", filename)
-            return "skipped"
+            return "checked"
         else:
             log.info("refreshing %s at %s", filename, keyname)
+            # TODO: This can fail if we've just deleted this key
             key.copy(bucket.name, key.name, reduced_redundancy=reduced_redundancy)
             return "refreshed"
     else:
@@ -125,24 +127,29 @@ def upload_directory(dirname, jobs, dryrun=False):
 
     retval = []
     stats = defaultdict(int)
+    size_by_state = defaultdict(int)
     m = Manifest()
     for job, filename, h in jobs:
         if job:
             # Specify a timeout for .get() to allow us to catch
             # KeyboardInterrupt.
-            state = job.get(86400)
+            state = job.get(86401)
         else:
             state = 'skipped'
 
-        stats[state] += 1
         stripped = strip_leading(dirname, filename)
-        perms = os.stat(filename).st_mode & 0777
+        st = os.stat(filename)
+        perms = st.st_mode & 0777
+        size = st.st_size
         m.add(h, stripped, perms)
         retval.append((state, filename, h))
+        stats[state] += 1
+        size_by_state[state] += size
 
     # Shut down pool
     pool.close()
     pool.join()
 
     log.info("stats: %s", dict(stats))
+    log.info("size stats: %s", dict(size_by_state))
     return m
