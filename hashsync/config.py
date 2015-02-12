@@ -20,3 +20,6 @@ REFRESH_EVERY_NTH_OBJECTS = 10000
 
 # how long we'll wait before giving up on an upload
 MAX_UPLOAD_TIME = 3600
+
+# time to wait before actually deleting old objects from the bucket
+PURGE_TIME = 86400 * 30
